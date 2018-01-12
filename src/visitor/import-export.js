@@ -14,14 +14,14 @@ const { keys } = Object
 
 class ImportExportVisitor extends Visitor {
   finalizeHoisting() {
-    const { info } = this
+    const { top } = this
     const codeToInsert =
-      info.hoistedPrefixString +
-      toModuleExport(this, info.hoistedExportsMap) +
-      info.hoistedExportsString +
-      info.hoistedImportsString
+      top.hoistedPrefixString +
+      toModuleExport(this, top.hoistedExportsMap) +
+      top.hoistedExportsString +
+      top.hoistedImportsString
 
-    this.magicString.prependRight(info.insertCharIndex, codeToInsert)
+    this.magicString.prependRight(top.insertCharIndex, codeToInsert)
   }
 
   reset(rootPath, code, options) {
@@ -36,11 +36,11 @@ class ImportExportVisitor extends Visitor {
     this.exportSpecifiers = new NullObject
     this.exportStarNames = []
     this.generateVarDeclarations = options.generateVarDeclarations
-    this.info = rootPath.stack[0].info
     this.madeChanges = false
     this.magicString = new MagicString(code)
     this.moduleSpecifiers = new NullObject
     this.runtimeName = options.runtimeName
+    this.top = rootPath.stack[0].top
   }
 
   visitCallExpression(path) {
@@ -77,7 +77,7 @@ class ImportExportVisitor extends Visitor {
     let i = -1
     const node = path.getValue()
     const { specifiers } = node
-    const specifierMap = computeSpecifierMap(specifiers)
+    const specifierMap = createSpecifierMap(this, node)
     const lastIndex = specifiers.length - 1
 
     let hoistedCode = specifiers.length
@@ -96,7 +96,7 @@ class ImportExportVisitor extends Visitor {
       specifierMap
     )
 
-    hoistImports(this, path, hoistedCode)
+    hoistImports(this, node, hoistedCode)
     addAssignableImports(this, specifierMap)
   }
 
@@ -134,7 +134,7 @@ class ImportExportVisitor extends Visitor {
       moduleSpecifiers[specifierName] = new NullObject
     }
 
-    hoistImports(this, path, hoistedCode)
+    hoistImports(this, node, hoistedCode)
   }
 
   visitExportDefaultDeclaration(path) {
@@ -159,7 +159,7 @@ class ImportExportVisitor extends Visitor {
         (id && type === "ClassDeclaration")) {
       // Support exporting default class and function declarations:
       // export default function named() {}
-      const name = id ? id.name : safeName(ANON_NAME, this.info.idents)
+      const name = id ? id.name : safeName(ANON_NAME, this.top.idents)
 
       if (! id) {
         // Convert anonymous functions to named functions so they are hoisted.
@@ -174,8 +174,8 @@ class ImportExportVisitor extends Visitor {
       // it's important that the declaration be visible to the rest of the
       // code in the exporting module, so we must avoid compiling it to a
       // named function or class expression.
-      hoistExports(this, path,
-        addToSpecifierMap(new NullObject, "default", name),
+      hoistExports(this, node,
+        addToSpecifierMap(this, new NullObject, "default", name),
         "declaration"
       )
     } else {
@@ -221,7 +221,8 @@ class ImportExportVisitor extends Visitor {
            type === "FunctionDeclaration")) {
         // Support exporting named class and function declarations:
         // export function named() {}
-        addNameToMap(specifierMap, id.name)
+        const { name } = id
+        addToSpecifierMap(this, specifierMap, name, name)
       } else if (type === "VariableDeclaration") {
         // Support exporting variable lists:
         // export let name1, name2, ..., nameN
@@ -229,12 +230,12 @@ class ImportExportVisitor extends Visitor {
           const names = getNamesFromPattern(decl.id)
 
           for (const name of names) {
-            addNameToMap(specifierMap, name)
+            addToSpecifierMap(this, specifierMap, name, name)
           }
         }
       }
 
-      hoistExports(this, path, specifierMap, "declaration")
+      hoistExports(this, node, specifierMap, "declaration")
 
       // Skip adding declared names to `this.assignableExports` if the
       // declaration is a const-kinded VariableDeclaration, because the
@@ -247,18 +248,16 @@ class ImportExportVisitor extends Visitor {
       return
     }
 
-    const { specifiers } = node
-
-    if (! specifiers) {
+    if (! node.specifiers) {
       return
     }
 
     // Support exporting specifiers:
     // export { name1, name2, ..., nameN }
-    let specifierMap = computeSpecifierMap(specifiers)
+    let specifierMap = createSpecifierMap(this, node)
 
     if (node.source == null) {
-      hoistExports(this, path, specifierMap)
+      hoistExports(this, node, specifierMap)
       addAssignableExports(this, specifierMap)
       return
     }
@@ -272,6 +271,7 @@ class ImportExportVisitor extends Visitor {
       exportSpecifiers[name] = 1
 
       addToSpecifierMap(
+        this,
         newMap,
         getLocal(specifierMap, name),
         this.runtimeName + ".entry._namespace." + name
@@ -280,7 +280,7 @@ class ImportExportVisitor extends Visitor {
 
     specifierMap = newMap
 
-    hoistImports(this, path, toModuleImport(
+    hoistImports(this, node, toModuleImport(
       this,
       getSourceString(this, node),
       specifierMap
@@ -315,20 +315,16 @@ function addAssignableExports(visitor, specifierMap) {
 function addAssignableImports(visitor, specifierMap) {
   const { assignableImports } = visitor
 
-  for (const name in specifierMap) {
-    for (const local in specifierMap[name]) {
-      assignableImports[local] = true
+  for (const portedName in specifierMap) {
+    for (const localName in specifierMap[portedName]) {
+      assignableImports[localName] = true
     }
   }
 }
 
-function addNameToMap(map, name) {
-  return addToSpecifierMap(map, name, name)
-}
-
-function addToSpecifierMap(map, __ported, local) {
-  const locals = map[__ported] || (map[__ported] = new NullObject)
-  locals[local] = true
+function addToSpecifierMap(visitor, map, portedName, localName) {
+  const locals = map[portedName] || (map[portedName] = new NullObject)
+  locals[localName] = true
   return map
 }
 
@@ -348,40 +344,39 @@ function canExportedValuesChange({ declaration, type }) {
   return true
 }
 
-// Returns a map from {im,ex}ported identifiers to lists of local variable
-// names bound to those identifiers.
-function computeSpecifierMap(specifiers) {
+// Returns a map of import or export specifier to their local variable names.
+function createSpecifierMap(visitor, node) {
+  const { specifiers } = node
   const specifierMap = new NullObject
 
   for (const specifier of specifiers) {
-    const local = specifier.local.name
+    const localName = specifier.local.name
     const { type } = specifier
 
-    // The IMported or EXported name.
-    let __ported = null
+    let portedName = null
 
     if (type === "ImportSpecifier") {
-      __ported = specifier.imported.name
+      portedName = specifier.imported.name
     } else if (type === "ImportDefaultSpecifier") {
-      __ported = "default"
+      portedName = "default"
     } else if (type === "ImportNamespaceSpecifier") {
-      __ported = "*"
+      portedName = "*"
     } else if (type === "ExportSpecifier") {
-      __ported = specifier.exported.name
+      portedName = specifier.exported.name
     }
 
-    if (typeof local === "string" &&
-        typeof __ported === "string") {
-      addToSpecifierMap(specifierMap, __ported, local)
+    if (typeof localName === "string" &&
+        typeof portedName === "string") {
+      addToSpecifierMap(visitor, specifierMap, portedName, localName)
     }
   }
 
   return specifierMap
 }
 
-function getLocal(specifierMap, name) {
-  for (const local in specifierMap[name]) {
-    return local
+function getLocal(specifierMap, portedName) {
+  for (const localName in specifierMap[portedName]) {
+    return localName
   }
 }
 
@@ -391,32 +386,28 @@ function getSourceString(visitor, { source }) {
   return visitor.code.slice(source.start, source.end)
 }
 
-function hoistExports(visitor, path, mapOrString, childName) {
+function hoistExports(visitor, node, map, childName) {
   if (childName) {
-    preserveChild(visitor, path, childName)
+    preserveChild(visitor, node, childName)
   } else {
-    preserveLine(visitor, path)
+    preserveLine(visitor, node)
   }
 
-  const { info } = visitor
+  const { top } = visitor
 
-  if (typeof mapOrString === "string") {
-    info.hoistedExportsString += mapOrString
-    return
-  }
-
-  for (const name in mapOrString) {
+  for (const portedName in map) {
     addToSpecifierMap(
-      info.hoistedExportsMap,
-      name,
-      getLocal(mapOrString, name)
+      visitor,
+      top.hoistedExportsMap,
+      portedName,
+      getLocal(map, portedName)
     )
   }
 }
 
-function hoistImports(visitor, path, hoistedCode) {
-  preserveLine(visitor, path)
-  visitor.info.hoistedImportsString += hoistedCode
+function hoistImports(visitor, node, hoistedCode) {
+  preserveLine(visitor, node)
+  visitor.top.hoistedImportsString += hoistedCode
 }
 
 function overwrite(visitor, oldStart, oldEnd, newCode) {
@@ -454,35 +445,19 @@ function pad(visitor, newCode, oldStart, oldEnd) {
   return newLines.join("\n")
 }
 
-function preserveChild(visitor, path, childName) {
-  const node = path.getValue()
+function preserveChild(visitor, node, childName) {
   const child = node[childName]
-
-  overwrite(
-    visitor,
-    node.start,
-    child.start,
-    ""
-  )
-  overwrite(
-    visitor,
-    child.end,
-    node.end,
-    ""
-  )
-
-  path.call(visitor, "visitWithoutReset", childName)
+  overwrite(visitor, node.start, child.start, "")
 }
 
-function preserveLine(visitor, path) {
-  const { end, start } = path.getValue()
+function preserveLine(visitor, { end, start }) {
   overwrite(visitor, start, end, "")
 }
 
-function safeName(name, locals) {
-  return locals.indexOf(name) === -1
+function safeName(name, localNames) {
+  return localNames.indexOf(name) === -1
     ? name
-    : safeName(encodeId(name), locals)
+    : safeName(encodeId(name), localNames)
 }
 
 function toModuleExport(visitor, specifierMap) {
@@ -535,15 +510,15 @@ function toModuleImport(visitor, specifierString, specifierMap) {
   code += ",["
 
   for (const name of names) {
-    const locals = keys(specifierMap[name])
-    const valueParam = safeName("v", locals)
+    const localNames = keys(specifierMap[name])
+    const valueParam = safeName("v", localNames)
 
     code +=
       // Generate plain functions, instead of arrow functions,
       // to avoid a perf hit in Node 4.
       "[" + toStringLiteral(name) + ",function(" + valueParam + "){" +
       // Multiple local variables become a compound assignment.
-      locals.join("=") + "=" + valueParam +
+      localNames.join("=") + "=" + valueParam +
       "}]"
 
     if (++i !== lastIndex) {
