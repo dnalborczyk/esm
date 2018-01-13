@@ -98,12 +98,18 @@ class Compiler {
     }
 
     const rootPath = new FastPath(ast)
+    const top = rootPath.stack[0].top
 
-    importExportVisitor.visit(rootPath, code, {
-      esm: type !== "script",
-      generateVarDeclarations: options.var,
-      runtimeName
-    })
+    try {
+      importExportVisitor.visit(rootPath, code, {
+        esm: type !== "script",
+        generateVarDeclarations: options.var,
+        runtimeName
+      })
+    } catch (e) {
+      e.sourceType = parserOptions.sourceType
+      throw e
+    }
 
     result.changed = importExportVisitor.changed
 
@@ -112,12 +118,17 @@ class Compiler {
         type = "module"
       }
 
-      assignmentVisitor.visit(rootPath, {
-        assignableExports: importExportVisitor.assignableExports,
-        assignableImports: importExportVisitor.assignableImports,
-        magicString: importExportVisitor.magicString,
-        runtimeName
-      })
+      try {
+        assignmentVisitor.visit(rootPath, {
+          assignableExports: importExportVisitor.assignableExports,
+          assignableImports: importExportVisitor.assignableImports,
+          magicString: importExportVisitor.magicString,
+          runtimeName
+        })
+      } catch (e) {
+        e.sourceType = parserOptions.sourceType
+        throw e
+      }
 
       importExportVisitor.finalizeHoisting()
     }
@@ -147,6 +158,7 @@ class Compiler {
 
       if (options.warnings &&
           ! options.cjs.vars &&
+          top.idents.indexOf("arguments") === -1 &&
           argumentsRegExp.test(code)) {
         result.warnings = []
         identifierVisitor.visit(rootPath, {

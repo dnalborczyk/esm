@@ -1,7 +1,6 @@
-import AcornError from "../acorn-error.js"
-
 import alwaysFalse from "../util/always-false.js"
 import alwaysTrue from "../util/always-true.js"
+import errors from "../parse/errors.js"
 import noop from "../util/noop.js"
 import wrap from "../util/wrap.js"
 
@@ -60,19 +59,18 @@ function raise(pos, message) {
     message = message.replace(parserTypePostfix, engineTypePostfix)
   }
 
-  throw new AcornError(this, pos, message)
+  throw new errors.SyntaxError(this.input, pos, message)
 }
 
 function raiseRecoverable(pos, message) {
   if (message.startsWith(parserDupPrefix)) {
-    message = message.replace(parserDupPrefix, engineDupPrefix)
-    throw new AcornError(this, pos, message)
+    this.raise(pos, message.replace(parserDupPrefix, engineDupPrefix))
   }
 
   if (message.startsWith("Binding ") ||
       message === "new.target can only be used in functions" ||
       message === "The keyword 'await' is reserved") {
-    throw new AcornError(this, pos, message)
+    this.raise(pos, message)
   }
 }
 

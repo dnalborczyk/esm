@@ -24,12 +24,6 @@ messages["ERR_MODULE_RESOLUTION_LEGACY"] = moduleResolutionLegacy
 messages["ERR_REQUIRE_ESM"] = requireESM
 messages["ERR_UNKNOWN_FILE_EXTENSION"] = unknownFileExtension
 
-const errors = new FastObject
-const supers = [Error, TypeError]
-
-errors.SyntaxError = createBuiltinClass(SyntaxError)
-supers.forEach((Super) => errors[Super.name] = createNodeClass(Super))
-
 function createBuiltinClass(Super) {
   return class BuiltinError extends Super {
     constructor(code, ...args) {
@@ -76,13 +70,12 @@ function exportStarConflict(request, exportName) {
 }
 
 function invalidArgType(argName, expected) {
-  return "The " + toStringLiteral(argName, "'") +
-    " argument must be " + expected
+  return "The '" + argName + "' argument must be " + expected
 }
 
 function invalidProtocol(protocol, expected) {
-  return "Protocol " + toStringLiteral(protocol, "'") +
-    " not supported. Expected " + toStringLiteral(expected, "'")
+  return "Protocol '" + protocol +
+    "' not supported. Expected '" + expected + "'"
 }
 
 function missingModule(request) {
@@ -101,5 +94,11 @@ function requireESM(request) {
 function unknownFileExtension(filePath) {
   return "Unknown file extension: " + filePath
 }
+
+const errors = new FastObject
+const supers = [Error, TypeError]
+
+errors.SyntaxError = createBuiltinClass(SyntaxError)
+supers.forEach((Super) => errors[Super.name] = createNodeClass(Super))
 
 export default errors

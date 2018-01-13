@@ -2,8 +2,8 @@ import NullObject from "../null-object.js"
 import SafeWeakMap from "../safe-weak-map.js"
 import Visitor from "../visitor.js"
 
+import errors from "../parse/errors.js"
 import getNamesFromPattern from "../parse/get-names-from-pattern.js"
-import raise from "../parse/raise.js"
 
 const shadowedMap = new SafeWeakMap
 
@@ -47,13 +47,11 @@ function assignmentHelper(visitor, path, childName) {
   for (const name of names) {
     if (assignableImports[name] === true &&
         ! isShadowed(path, name)) {
-      const parser = {
-        input: visitor.magicString.original,
-        pos: node.start,
-        start: node.start
-      }
-
-      raise(parser, parser.start, "Assignment to constant variable.", TypeError)
+      throw new errors.TypeError(
+        visitor.magicString.original,
+        node.start,
+        "Assignment to constant variable."
+      )
     }
   }
 
